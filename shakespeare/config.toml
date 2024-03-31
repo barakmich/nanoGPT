@@ -1,7 +1,7 @@
 [project]
 name = "shakespeare"
-dataset = "shakespeare"
-compile = false
+dataset_dir = "shakespeare"
+compile = true
 device = "cuda"
 
 [wandb]

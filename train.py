@@ -18,12 +18,13 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
-import math
 import pickle
 from contextlib import nullcontext
+from typing import Literal
 
 import numpy as np
 import torch
+import torch.amp
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -60,13 +61,13 @@ def get_ddp_config(config: NanoGPTConfig) -> DDPConfig | None:
 
 
 
-def get_batch(split: str, config: NanoGPTConfig):
+def get_batch(split: Literal["train", "val"], config: NanoGPTConfig):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == 'train':
-        data = np.memmap(os.path.join(config.output_dir, 'train.bin'), dtype=np.uint16, mode='r')
+        data = np.memmap(os.path.join(config.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
-        data = np.memmap(os.path.join(config.output_dir, 'val.bin'), dtype=np.uint16, mode='r')
+        data = np.memmap(os.path.join(config.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
     batch_size = config.training.batch_size
     block_size = config.model.context_size
     ix = torch.randint(len(data) - block_size, (batch_size,))
@@ -83,7 +84,7 @@ def get_batch(split: str, config: NanoGPTConfig):
 
 # attempt to derive vocab_size from the dataset
 def get_vocab_size(config: NanoGPTConfig) -> int | None:
-    meta_path = os.path.join(config.output_dir, 'meta.pkl')
+    meta_path = os.path.join(config.data_dir, 'meta.pkl')
     meta_vocab_size = None
     if os.path.exists(meta_path):
         with open(meta_path, 'rb') as f:
@@ -216,20 +217,21 @@ def init_model(init_from: str, config: NanoGPTConfig) -> ModelTrainer:
 @torch.no_grad()
 def estimate_loss(ctx, trainer: ModelTrainer):
     out = {}
-    with trainer.model.eval():
-        for split in ['train', 'val']:
-            losses = torch.zeros(trainer.config.output.eval_iters)
-            for k in range(trainer.config.output.eval_iters):
-                X, Y = get_batch(split, trainer.config)
-                with ctx:
-                    _, loss = trainer.model(X, Y)
-                losses[k] = loss.item()
-            out[split] = losses.mean()
+    trainer.model.eval()
+    opts: list[Literal["train", "val"]] = ["train", "val"]
+    for split in opts:
+        losses = torch.zeros(trainer.config.output.eval_iters)
+        for k in range(trainer.config.output.eval_iters):
+            X, Y = get_batch(split, trainer.config)
+            with ctx:
+                _, loss = trainer.model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
     trainer.model.train()
     return out
 
 def report_loss_and_checkpoint(ctx, trainer: ModelTrainer):
-    is_master_process = trainer.config.ddp and trainer.config.ddp.master_process
+    is_master_process = not trainer.config.ddp or trainer.config.ddp.master_process
     if trainer.iter_num % trainer.config.output.eval_interval == 0 and is_master_process:
         losses = estimate_loss(ctx, trainer)
         print(f"step {trainer.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
@@ -328,14 +330,14 @@ def training_loop(ctx, trainer: ModelTrainer):
             break
 
 
-def train_main(config: NanoGPTConfig):
+def train_main(init_from: Literal["scratch", "resume"], config: NanoGPTConfig):
     ddp = get_ddp_config(config)
     config.ddp = ddp
     world_size = ddp.world_size if ddp else 1
     tokens_per_iter = config.training.gradient_accumulation_steps * world_size * config.training.batch_size * config.model.context_size
     print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
-    if ddp and ddp.master_process:
+    if not ddp or ddp.master_process:
         os.makedirs(config.output_dir, exist_ok=True)
 
     seed_offset = ddp.seed_offset if ddp else 0
@@ -353,6 +355,8 @@ def train_main(config: NanoGPTConfig):
             import wandb
             # TODO: push the config variables that are important along
             wandb.init(project=config.wandb.project_name, name=config.wandb.run_name)
+    t = init_model(init_from, config)
+    training_loop(ctx, t)
 
     ####
     if ddp:

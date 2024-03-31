@@ -3,6 +3,7 @@ from pathlib import Path
 import logging
 
 from config import NanoGPTConfig
+from train import train_main
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ def main():
     train_parser = subparsers.add_parser("train", help="train a model")
     train_parser.add_argument("--eval_iters", type=int)
     train_parser.add_argument("-i", "--iters", type=int)
+    train_parser.add_argument("--resume", action="store_true", default=False, help="Resume from last checkpoint")
     train_parser.set_defaults(subcommand="train")
     sample_parser = subparsers.add_parser("sample", help="sample from a model")
     sample_parser.add_argument("-p", "--prompt", help="Starting prompt")
@@ -28,10 +30,12 @@ def main():
     logger.info(f"Using config file {config_path}")
 
     ngpt_config = NanoGPTConfig.from_toml(config_path)
-    init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 
     if args.subcommand == "train":
-        pass
+        if args.resume:
+            train_main("resume", ngpt_config)
+        else:
+            train_main("scratch", ngpt_config)
     elif args.subcommand == "sample":
         pass
     elif args.subcommand == "config":

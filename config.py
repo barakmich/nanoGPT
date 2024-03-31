@@ -7,7 +7,7 @@ from pathlib import Path
 @dataclass
 class ProjectConfig:
     name: str
-    dataset: str
+    dataset_dir: str
     compile: bool = True
     device: str = "cuda"  # "cpu", "cuda", "cuda:0", "mps" for Macs
     eval_only: bool = False
@@ -112,6 +112,10 @@ class NanoGPTConfig:
         return os.path.join(self.base_path, self.output.out_dir)
 
     @property
+    def data_dir(self) -> str:
+        return os.path.join(self.base_path, self.project.dataset_dir)
+
+    @property
     def device_type(self) -> str:
         return "cuda" if "cuda" in self.project.device else "cpu"
 
@@ -139,6 +143,6 @@ class NanoGPTConfig:
             wandb = WandbConfig(**d["wandb"])
         else:
             wandb = WandbConfig()
-        conf = NanoGPTConfig(project=project, output=output,model=model, training=train, wandb=wandb, base_path=os.path.dirname(path))
+        conf = NanoGPTConfig(project=project, output=output,model=model, training=train, wandb=wandb, base_path=os.path.abspath(os.path.dirname(path)))
         return conf
 
