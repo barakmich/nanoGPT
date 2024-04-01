@@ -31,14 +31,13 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.optim import AdamW
 from torch.optim.optimizer import StateDict
 from config import DDPConfig, NanoGPTConfig
+from setup_context import setup_context
 
 from model import GPTConfig, GPT
 from dataclasses import dataclass
 
 # -----------------------------------------------------------------------------
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-
-# -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
 def get_ddp_config(config: NanoGPTConfig) -> DDPConfig | None:
@@ -334,6 +333,7 @@ def train_main(init_from: Literal["scratch", "resume"], config: NanoGPTConfig):
     ddp = get_ddp_config(config)
     config.ddp = ddp
     world_size = ddp.world_size if ddp else 1
+
     tokens_per_iter = config.training.gradient_accumulation_steps * world_size * config.training.batch_size * config.model.context_size
     print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
@@ -341,20 +341,15 @@ def train_main(init_from: Literal["scratch", "resume"], config: NanoGPTConfig):
         os.makedirs(config.output_dir, exist_ok=True)
 
     seed_offset = ddp.seed_offset if ddp else 0
-    torch.manual_seed(1337 + seed_offset)
+    ctx = setup_context(1337 + seed_offset, config.device_type)
 
-    torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-    torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
-    # note: float16 data type will automatically use a GradScaler
-    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-    ctx = nullcontext() if config.device_type == 'cpu' else torch.amp.autocast(device_type=config.device_type, dtype=ptdtype)
-    ####
     # logging
     if config.wandb.enabled:
         if not ddp or ddp.master_process:
             import wandb
             # TODO: push the config variables that are important along
             wandb.init(project=config.wandb.project_name, name=config.wandb.run_name)
+
     t = init_model(init_from, config)
     training_loop(ctx, t)
 
