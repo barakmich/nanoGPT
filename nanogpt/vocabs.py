@@ -94,12 +94,12 @@ class DictVocabulary(Vocabulary):
 class VocabPair:
     def __init__(self, input: Vocabulary, output: Vocabulary | None) -> None:
         self.input = input
-        self.output = output
+        self._output = output
 
     def _build_dict(self) -> dict[str, Any]:
         return {
             "input": self.input.to_dict(),
-            "output": self.output.to_dict() if self.output else None,
+            "output": self._output.to_dict() if self._output else None,
         }
 
     def dump(self, writer: Any):
@@ -124,6 +124,10 @@ class VocabPair:
         if d["output"] is not None:
             output = instantiate_vocab(d["output"])
         return VocabPair(input=input, output=output)
+
+    @property
+    def output(self) -> Vocabulary:
+        return self._output if self._output is not None else self.input
 
 
 def instantiate_vocab(d: dict) -> Vocabulary:

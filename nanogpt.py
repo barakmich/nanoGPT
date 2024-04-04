@@ -2,9 +2,9 @@ import argparse
 from pathlib import Path
 import logging
 
-from config import NanoGPTConfig
-from sample import ModelSampler, sample_main
-from train import train_main
+from nanogpt.config import NanoGPTConfig
+from nanogpt.sample import ModelSampler, sample_main
+from nanogpt.train import train_main
 
 logger = logging.getLogger(__name__)
 

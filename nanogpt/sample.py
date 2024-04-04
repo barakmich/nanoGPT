@@ -2,12 +2,11 @@
 Sample from a trained model
 """
 import os
-import pickle
 import torch
-import tiktoken
-from config import NanoGPTConfig
-from setup_context import setup_context
-from model import GPTConfig, GPT
+from nanogpt.config import NanoGPTConfig
+from nanogpt.vocabs import VocabPair
+from nanogpt.setup_context import setup_context
+from nanogpt.model import GPTConfig, GPT
 from dataclasses import dataclass
 
 @dataclass
@@ -41,26 +40,12 @@ def sample_main(sampler: ModelSampler, prompt: str | None = None, seed:int = 133
     if config.project.compile:
         model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
-    # look for the meta pickle in case it is available in the dataset folder
-    meta_path = os.path.join(config.data_dir, 'meta.pkl')
-    load_meta = os.path.exists(meta_path)
-    if load_meta:
-        print(f"Loading meta from {meta_path}...")
-        with open(meta_path, 'rb') as f:
-            meta = pickle.load(f)
-        # TODO want to make this more general to arbitrary encoder/decoder schemes
-        stoi, itos = meta['stoi'], meta['itos']
-        encode = lambda s: [stoi[c] for c in s]
-        decode = lambda l: ''.join([itos[i] for i in l])
-    else:
-        # ok let's assume gpt-2 encodings by default
-        print("No meta.pkl found, assuming GPT-2 encodings...")
-        enc = tiktoken.get_encoding("gpt2")
-        encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
-        decode = lambda l: enc.decode(l)
+    vocab_path = os.path.join(config.data_dir, 'vocab.msgpack')
+    with open(vocab_path, "rb") as f:
+        vocab = VocabPair.load(f)
 
     # encode the beginning of the prompt
-    start_ids = encode(prompt)
+    start_ids = vocab.input.encode_string(prompt)
     x = (torch.tensor(start_ids, dtype=torch.long, device=config.device)[None, ...])
 
     # run generation
@@ -68,5 +53,5 @@ def sample_main(sampler: ModelSampler, prompt: str | None = None, seed:int = 133
         with ctx:
             for k in range(sampler.num_samples):
                 y = model.generate(x, sampler.max_tokens, temperature=sampler.temperature, top_k=sampler.top_k)
-                print(decode(y[0].tolist()))
+                print(vocab.output.decode_string(y[0].tolist()))
                 print('---------------')

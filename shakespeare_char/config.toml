@@ -2,7 +2,7 @@
 name = "shakespeare-char"
 dataset_dir = "data"
 compile = true
-device = "cuda"
+device = "cuda"  # could also be "cpu" or "mps" for Macbooks
 
 [wandb]
 enabled = false

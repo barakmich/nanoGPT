@@ -18,10 +18,11 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
-import pickle
 from typing import Literal
 
 import numpy as np
+from dataclasses import dataclass
+
 import torch
 import torch.amp
 from torch.cuda.amp import GradScaler
@@ -29,11 +30,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.optim import AdamW
 from torch.optim.optimizer import StateDict
-from config import DDPConfig, NanoGPTConfig
-from setup_context import setup_context
 
-from model import GPTConfig, GPT
-from dataclasses import dataclass
+from nanogpt.config import DDPConfig, NanoGPTConfig
+from nanogpt.setup_context import setup_context
+from nanogpt.model import GPTConfig, GPT
+from nanogpt.vocabs import VocabPair
 
 # -----------------------------------------------------------------------------
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
@@ -80,16 +81,11 @@ def get_batch(split: Literal["train", "val"], config: NanoGPTConfig):
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 
-# attempt to derive vocab_size from the dataset
-def get_vocab_size(config: NanoGPTConfig) -> int | None:
-    meta_path = os.path.join(config.data_dir, 'meta.pkl')
-    meta_vocab_size = None
-    if os.path.exists(meta_path):
-        with open(meta_path, 'rb') as f:
-            meta = pickle.load(f)
-        meta_vocab_size = meta['vocab_size']
-        print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
-    return meta_vocab_size
+def get_vocab(config: NanoGPTConfig) -> VocabPair:
+    vocab_path = os.path.join(config.data_dir, "vocab.msgpack")
+    with open(vocab_path, "rb") as f:
+        vocab = VocabPair.load(f)
+    return vocab
 
 def optimize_vocab_size(i: int) -> int:
     # Bring it to the next multiple of 64, for performance reasons.
@@ -121,24 +117,20 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
     iter_num: int = 0
     best_val_loss: float = 1e9
     checkpoint = None
-    meta_vocab_size = get_vocab_size(config)
+    vocab = get_vocab(config)
     model_args = dict(
         n_layer=config.model.layers,
         n_head=config.model.heads,
         n_embd=config.model.embedding_dimension,
         block_size=config.model.context_size,
         bias=config.model.bias,
-        vocab_size=None,
+        vocab_size=optimize_vocab_size(vocab.input.vocab_size),
         dropout=config.training.dropout
     ) # start with model_args from command line
 
     if init_from == 'scratch':
         # init a new model from scratch
         print("Initializing a new model from scratch")
-        # determine the vocab size we'll use for from-scratch training
-        if meta_vocab_size is None:
-            print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
-        model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)
     elif init_from == 'resume':
