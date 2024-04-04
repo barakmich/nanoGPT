@@ -19,7 +19,6 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 import os
 import time
 import pickle
-from contextlib import nullcontext
 from typing import Literal
 
 import numpy as np
@@ -91,6 +90,14 @@ def get_vocab_size(config: NanoGPTConfig) -> int | None:
         meta_vocab_size = meta['vocab_size']
         print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
     return meta_vocab_size
+
+def optimize_vocab_size(i: int) -> int:
+    # Bring it to the next multiple of 64, for performance reasons.
+    # TODO: Does it need to be above a threshhold to see the usefulness of it?
+    off = i % 64
+    if i == 0:
+        return i
+    return (64 - off) + i
 
 @dataclass
 class ModelTrainer:

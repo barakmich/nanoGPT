@@ -1,0 +1,38 @@
+[project]
+name = "shakespeare-char"
+dataset_dir = "data"
+compile = true
+device = "cuda"
+
+[wandb]
+enabled = false
+project_name = "shakespeare-char"
+run_name = "mini-gpt"
+
+[model]
+layers = 6
+heads = 6
+embedding_dimension = 384
+context_size = 256
+
+[output]
+out_dir = "output"
+eval_interval = 250 # keep frequent because we'll overfit
+eval_iters = 200
+log_interval = 10 # don't print too too often
+always_checkpoint = false
+
+[training]
+batch_size = 64
+gradient_accumulation_steps = 1
+dropout = 0.2
+max_iters = 5000
+
+[training.adamw]
+learning_rate = 1e-3
+beta2 = 0.99
+
+[training.lr_decay]
+warmup_iters = 100
+decay_iters = 5000
+min_learning_rate = 1e-4  # learning_rate / 10 usually
