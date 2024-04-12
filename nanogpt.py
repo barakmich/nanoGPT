@@ -22,6 +22,7 @@ def main():
 
     sample_parser = subparsers.add_parser("sample", help="sample from a model")
     sample_parser.add_argument("-p", "--prompt", help="Starting prompt")
+    sample_parser.add_argument("-t", "--token_prompt", default=[], nargs="+")
     sample_parser.add_argument("-n", "--num_samples", type=int, help="Number of turns to sample")
     sample_parser.add_argument("--max_tokens", type=int, help="Return up to this many tokens in a turn")
     sample_parser.add_argument("--temperature", type=float)
@@ -56,7 +57,10 @@ def main():
             sampler.temperature = args.temperature
         if args.top_k:
             sampler.top_k = args.top_k
-        sample_main(sampler, args.prompt)
+        prompt = args.prompt
+        if len(args.token_prompt) != 0:
+            prompt = args.token_prompt
+        sample_main(sampler, prompt)
 
     elif args.subcommand == "config":
         print(str(ngpt_config))

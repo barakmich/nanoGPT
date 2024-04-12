@@ -18,9 +18,10 @@ class ModelSampler:
     top_k: int = 200
 
 
-def sample_main(sampler: ModelSampler, prompt: str | None = None, seed:int = 1337):
+def sample_main(sampler: ModelSampler, prompt: str | list[str] | None = None, seed:int = 1337):
     if prompt is None:
         prompt = "\n"
+
     config = sampler.config
 # start is the prompt variable
     ctx = setup_context(seed, config.device_type)
@@ -45,7 +46,10 @@ def sample_main(sampler: ModelSampler, prompt: str | None = None, seed:int = 133
         vocab = VocabPair.load(f)
 
     # encode the beginning of the prompt
-    start_ids = vocab.input.encode_string(prompt)
+    if isinstance(prompt, list):
+        start_ids = vocab.input.encode(prompt)
+    else:
+        start_ids = vocab.input.encode_string(prompt)
     x = (torch.tensor(start_ids, dtype=torch.long, device=config.device)[None, ...])
 
     # run generation

@@ -32,6 +32,7 @@ from torch.optim import AdamW
 from torch.optim.optimizer import StateDict
 
 from nanogpt.config import DDPConfig, NanoGPTConfig
+from nanogpt.data_loader import DataLoader, open_dataset
 from nanogpt.setup_context import setup_context
 from nanogpt.model import GPTConfig, GPT
 from nanogpt.vocabs import VocabPair
@@ -59,28 +60,6 @@ def get_ddp_config(config: NanoGPTConfig) -> DDPConfig | None:
         return None
 
 
-
-def get_batch(split: Literal["train", "val"], config: NanoGPTConfig):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(config.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(config.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    batch_size = config.training.batch_size
-    block_size = config.model.context_size
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    if config.device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(config.device, non_blocking=True), y.pin_memory().to(config.device, non_blocking=True)
-    else:
-        x, y = x.to(config.device), y.to(config.device)
-    return x, y
-
-# init these up here, can override if init_from='resume' (i.e. from a checkpoint)
-
 def get_vocab(config: NanoGPTConfig) -> VocabPair:
     vocab_path = os.path.join(config.data_dir, "vocab.msgpack")
     with open(vocab_path, "rb") as f:
@@ -102,6 +81,7 @@ class ModelTrainer:
     scaler: GradScaler
     optimizer: AdamW
     config: NanoGPTConfig
+    data_loader: DataLoader
     current_learning_rate: float
     iter_num: int = 0
     best_val_loss: float = 1e9
@@ -118,13 +98,18 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
     best_val_loss: float = 1e9
     checkpoint = None
     vocab = get_vocab(config)
+
+    in_vocab_size = optimize_vocab_size(vocab.input.vocab_size) if config.model.optimize_input_logits else vocab.input.vocab_size
+    out_vocab_size = optimize_vocab_size(vocab.output.vocab_size) if config.model.optimize_output_logits else vocab.output.vocab_size
+
     model_args = dict(
         n_layer=config.model.layers,
         n_head=config.model.heads,
         n_embd=config.model.embedding_dimension,
         block_size=config.model.context_size,
         bias=config.model.bias,
-        vocab_size=optimize_vocab_size(vocab.input.vocab_size),
+        vocab_size=in_vocab_size,
+        output_vocab_size=out_vocab_size,
         dropout=config.training.dropout
     ) # start with model_args from command line
 
@@ -141,7 +126,7 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
-        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'output_vocab_size']:
             model_args[k] = checkpoint_model_args[k]
         # create the model
         gptconf = GPTConfig(**model_args)
@@ -199,10 +184,13 @@ def init_model(init_from: str, config: NanoGPTConfig) -> ModelTrainer:
     if config.ddp:
         model = DDP(model, device_ids=[config.ddp.local_rank])
 
+    data_loader = open_dataset(config)
+
     return ModelTrainer(
         model=model,   # type: ignore
         model_args=model_args,
         scaler=scaler,
+        data_loader=data_loader,
         optimizer=optimizer,
         config=config,
         current_learning_rate=config.training.learning_rate,
@@ -220,7 +208,10 @@ def estimate_loss(ctx, trainer: ModelTrainer):
     for split in opts:
         losses = torch.zeros(trainer.config.output.eval_iters)
         for k in range(trainer.config.output.eval_iters):
-            X, Y = get_batch(split, trainer.config)
+            if split == "train":
+                X, Y = trainer.data_loader.get_train_batch()
+            else:
+                X, Y = trainer.data_loader.get_val_batch()
             with ctx:
                 _, loss = trainer.model(X, Y)
             losses[k] = loss.item()
@@ -273,7 +264,7 @@ def training_loop(ctx, trainer: ModelTrainer):
     config = trainer.config
     model = trainer.model
     gradient_accumulation_steps = config.training.gradient_accumulation_steps
-    X, Y = get_batch('train', config) # fetch the very first batch
+    X, Y = trainer.data_loader.get_train_batch() # fetch the very first batch
     last_timestamp = time.time()
     local_iter_num = 0 # number of iterations in the lifetime of this process
     loss = None
@@ -302,7 +293,7 @@ def training_loop(ctx, trainer: ModelTrainer):
                 _, loss = model(X, Y)
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
-            X, Y = get_batch('train', config)
+            X, Y = trainer.data_loader.get_train_batch()
             # backward pass, with gradient scaling if training in fp16
             trainer.scaler.scale(loss).backward()
         # clip the gradient

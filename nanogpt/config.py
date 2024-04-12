@@ -12,6 +12,7 @@ class ProjectConfig:
     device: str = "cuda"  # "cpu", "cuda", "cuda:0", "mps" for Macs
     eval_only: bool = False
     ddp_backend: str = "nccl"  # "nccl", "gloo", etc
+    dataset_meta_file: str = "dataset.msgpack"
 
 @dataclass
 class OutputConfig:
@@ -33,6 +34,8 @@ class ModelConfig:
     heads: int
     embedding_dimension: int
     context_size: int
+    optimize_input_logits: bool = True
+    optimize_output_logits: bool = True
     bias: bool = False
 
 @dataclass

@@ -64,9 +64,10 @@ class TikTokenVocabulary(Vocabulary):
 class DictVocabulary(Vocabulary):
     kind: str = "dict"
 
-    def __init__(self, stoi: dict[str, int]):
+    def __init__(self, stoi: dict[str, int], sep: str = ""):
         self.stoi = stoi
         self.itos = {v: k for k, v in stoi.items()}
+        self.sep = sep
 
     def encode(self, tokens: list[str]) -> list[int]:
         return [self.stoi[x] for x in tokens]
@@ -78,7 +79,7 @@ class DictVocabulary(Vocabulary):
         return [self.stoi[c] for c in s]
 
     def decode_string(self, tokens: list[int]) -> str:
-        return ''.join(self.decode(tokens))
+        return self.sep.join(self.decode(tokens))
 
     @property
     def vocab_size(self) -> int:
@@ -88,6 +89,7 @@ class DictVocabulary(Vocabulary):
         return {
             "kind": self.kind,
             "stoi": self.stoi,
+            "sep": self.sep,
         }
 
 
@@ -121,7 +123,7 @@ class VocabPair:
         assert isinstance(d, dict)
         input = instantiate_vocab(d["input"])
         output = input
-        if d["output"] is not None:
+        if "output" in d and d["output"] is not None:
             output = instantiate_vocab(d["output"])
         return VocabPair(input=input, output=output)
 
@@ -138,6 +140,6 @@ def instantiate_vocab(d: dict) -> Vocabulary:
                 allowed_special=set(d["allowed_special"]),
             )
         case "dict":
-            return DictVocabulary(d["stoi"])
+            return DictVocabulary(d["stoi"], sep=d["sep"] if "sep" in d else "")
         case _:
             raise Exception("Unexpected input dictionary kind")
