@@ -3,6 +3,7 @@ from pathlib import Path
 import logging
 
 from nanogpt.config import NanoGPTConfig
+from nanogpt.head import head_main
 from nanogpt.sample import ModelSampler, sample_main
 from nanogpt.train import train_main
 
@@ -29,8 +30,11 @@ def main():
     sample_parser.add_argument("--top_k", type=int, help="Number of top tokens to sample from (generate nothing too weird)")
     sample_parser.set_defaults(subcommand="sample")
 
-    config_parser = subparsers.add_parser("print-config", help="train a model")
+    config_parser = subparsers.add_parser("config", help="print the config")
     config_parser.set_defaults(subcommand="config")
+
+    head_parser = subparsers.add_parser("head", help="peek into the dataset")
+    head_parser.set_defaults(subcommand="head")
 
 
     args = parser.parse_args()
@@ -61,7 +65,8 @@ def main():
         if len(args.token_prompt) != 0:
             prompt = args.token_prompt
         sample_main(sampler, prompt)
-
+    elif args.subcommand == "head":
+        head_main(ngpt_config)
     elif args.subcommand == "config":
         print(str(ngpt_config))
     else:
