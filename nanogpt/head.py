@@ -8,7 +8,7 @@ def head_main(config: NanoGPTConfig):
     vocab = get_vocab(config)
     x, y = data_loader.get_train_batch()
     print(f"X shape: {x.shape}")
-    print(f"Y shape: {x.shape}")
+    print(f"Y shape: {y.shape}")
     for i in range(x.shape[0]):
         print("******")
         print(f"Input: {x[i]}")

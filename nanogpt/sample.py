@@ -18,7 +18,7 @@ class ModelSampler:
     top_k: int = 200
 
 
-def sample_main(sampler: ModelSampler, prompt: str | list[str] | None = None, seed:int = 1337):
+def sample_main(sampler: ModelSampler, prompt: str | list[str] | None = None, seed:int = 1337, last: bool = False):
     if prompt is None:
         prompt = "\n"
 
@@ -57,5 +57,9 @@ def sample_main(sampler: ModelSampler, prompt: str | list[str] | None = None, se
         with ctx:
             for k in range(sampler.num_samples):
                 y = model.generate(x, sampler.max_tokens, temperature=sampler.temperature, top_k=sampler.top_k)
-                print(vocab.output.decode_string(y[0].tolist()))
+                out_toks = y[0].tolist()
+                if last:
+                    print(vocab.output.decode_string([out_toks[-1]]))
+                else:
+                    print(vocab.output.decode_string(out_toks))
                 print('---------------')

@@ -37,6 +37,8 @@ class ModelConfig:
     optimize_input_logits: bool = True
     optimize_output_logits: bool = True
     bias: bool = False
+    causal: bool = True
+    sum_logits: bool = False
 
 @dataclass
 class AdamWConfig:
