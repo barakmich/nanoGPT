@@ -20,7 +20,6 @@ import os
 import time
 from typing import Literal
 
-import numpy as np
 from dataclasses import dataclass
 
 import torch
@@ -32,10 +31,9 @@ from torch.optim import AdamW
 from torch.optim.optimizer import StateDict
 
 from nanogpt.config import DDPConfig, NanoGPTConfig
-from nanogpt.data_loader import DataLoader, open_dataset
+from nanogpt.data_loader import BatchType, DataLoader, open_dataset
 from nanogpt.setup_context import setup_context
 from nanogpt.model import GPTConfig, GPT
-from nanogpt.vocabs import VocabPair
 
 # -----------------------------------------------------------------------------
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
@@ -59,12 +57,6 @@ def get_ddp_config(config: NanoGPTConfig) -> DDPConfig | None:
         # if not ddp, we are running on a single gpu, and one process
         return None
 
-
-def get_vocab(config: NanoGPTConfig) -> VocabPair:
-    vocab_path = os.path.join(config.data_dir, "vocab.msgpack")
-    with open(vocab_path, "rb") as f:
-        vocab = VocabPair.load(f)
-    return vocab
 
 def optimize_vocab_size(i: int) -> int:
     # Bring it to the next multiple of 64, for performance reasons.
@@ -97,7 +89,7 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
     iter_num: int = 0
     best_val_loss: float = 1e9
     checkpoint = None
-    vocab = get_vocab(config)
+    vocab = config.vocab
 
     in_vocab_size = optimize_vocab_size(vocab.input.vocab_size) if config.model.optimize_input_logits else vocab.input.vocab_size
     out_vocab_size = optimize_vocab_size(vocab.output.vocab_size) if config.model.optimize_output_logits else vocab.output.vocab_size
@@ -209,9 +201,9 @@ def estimate_loss(ctx, trainer: ModelTrainer):
         losses = torch.zeros(trainer.config.output.eval_iters)
         for k in range(trainer.config.output.eval_iters):
             if split == "train":
-                X, Y = trainer.data_loader.get_train_batch()
+                X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT]))
             else:
-                X, Y = trainer.data_loader.get_val_batch()
+                X, Y = tuple(trainer.data_loader.get_val_batch([BatchType.INPUT, BatchType.OUTPUT]))
             with ctx:
                 _, loss = trainer.model(X, Y)
             losses[k] = loss.item()
@@ -264,7 +256,7 @@ def training_loop(ctx, trainer: ModelTrainer):
     config = trainer.config
     model = trainer.model
     gradient_accumulation_steps = config.training.gradient_accumulation_steps
-    X, Y = trainer.data_loader.get_train_batch() # fetch the very first batch
+    X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT])) # fetch the very first batch
     last_timestamp = time.time()
     local_iter_num = 0 # number of iterations in the lifetime of this process
     loss = None
@@ -293,7 +285,7 @@ def training_loop(ctx, trainer: ModelTrainer):
                 _, loss = model(X, Y)
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
-            X, Y = trainer.data_loader.get_train_batch()
+            X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT]))
             # backward pass, with gradient scaling if training in fp16
             trainer.scaler.scale(loss).backward()
         # clip the gradient

@@ -1,12 +1,11 @@
 from nanogpt.config import NanoGPTConfig
-from nanogpt.data_loader import open_dataset
-from nanogpt.train import get_vocab
+from nanogpt.data_loader import BatchType, open_dataset
 
 
 def head_main(config: NanoGPTConfig):
     data_loader = open_dataset(config)
-    vocab = get_vocab(config)
-    x, y = data_loader.get_train_batch()
+    vocab = config.vocab
+    x, y = tuple(data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT]))
     print(f"X shape: {x.shape}")
     print(f"Y shape: {y.shape}")
     for i in range(x.shape[0]):

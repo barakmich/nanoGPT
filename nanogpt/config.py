@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from nanogpt.vocabs import VocabPair
+
 @dataclass
 class ProjectConfig:
     name: str
@@ -111,6 +113,16 @@ class NanoGPTConfig:
     training: TrainingConfig
     base_path: str
     ddp: DDPConfig | None = None
+    _vocab: VocabPair | None = None
+
+    @property
+    def vocab(self) -> VocabPair:
+        if self._vocab is not None:
+            return self._vocab
+        vocab_path = os.path.join(self.data_dir, "vocab.msgpack")
+        with open(vocab_path, "rb") as f:
+            self._vocab = VocabPair.load(f)
+        return self._vocab
 
     @property
     def output_dir(self) -> str:

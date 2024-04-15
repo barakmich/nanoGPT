@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 import msgpack
 import torch
@@ -15,10 +16,18 @@ class ContextConfig:
     batch_size: int
     context_size: int
     data_dir: str
+    input_vocab_size: int
+    output_vocab_size: int
 
     @property
     def device_type(self):
         return "cuda" if "cuda" in self.default_device else "cpu"
+
+
+class BatchType(Enum):
+    INPUT = "input"
+    OUTPUT = "output"
+    OUTPUT_MASK = "output_mask"
 
 
 class DataLoader(ABC):
@@ -27,11 +36,11 @@ class DataLoader(ABC):
         pass
 
     @abstractmethod
-    def get_train_batch(self) -> tuple[Tensor, Tensor]:
+    def get_train_batch(self, get: list[BatchType]) -> list[Tensor]:
         pass
 
     @abstractmethod
-    def get_val_batch(self) -> tuple[Tensor, Tensor]:
+    def get_val_batch(self, get: list[BatchType]) -> list[Tensor]:
         pass
 
 
@@ -41,30 +50,47 @@ class FixedEntryDataLoader(DataLoader):
         print(f"{config=}")
         self.train_path = os.path.join(context_config.data_dir, config["train_path"])
         self.val_path = os.path.join(context_config.data_dir, config["val_path"])
-        self.input_size = config["input_size"]
-        self.output_size = config["output_size"]
-        self.record_size = self.input_size + self.output_size
+        self.offset_map = {}
+        self.index_set = set()
+        start = 0
+        for f in config["fields"]:
+            name = f["kind"]
+            size = f["size"]
+            self.offset_map[name] = (start, start + size)
+            if f["indexes"]:
+                self.index_set.add(name)
+            start += size
+        self.record_size = start
 
-    def get_train_batch(self) -> tuple[Tensor, Tensor]:
+    def get_train_batch(self, get: list[BatchType]) -> list[Tensor]:
         data = np.memmap(self.train_path, dtype=np.uint16, mode='r')
-        return self._get_batch(data)
+        return self._get_batch(data, get)
 
-    def get_val_batch(self) -> tuple[Tensor, Tensor]:
+    def get_val_batch(self, get: list[BatchType]) -> list[Tensor]:
         data = np.memmap(self.val_path, dtype=np.uint16, mode='r')
-        return self._get_batch(data)
+        return self._get_batch(data, get)
 
-    def _get_batch(self, data) -> tuple[Tensor, Tensor]:
+    def _get_batch(self, data, get: list[BatchType]) -> list[Tensor]:
         batch_size = self.config.batch_size
         entries = len(data) // self.record_size
         ix = torch.randint(entries, (batch_size,))
-        x = torch.stack([torch.from_numpy((data[i*self.record_size:i*self.record_size+self.input_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i*self.record_size + self.input_size:i*self.record_size + self.input_size + self.output_size]).astype(np.int64)) for i in ix])
-        if self.config.device_type == 'cuda':
-            # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-            x, y = x.pin_memory().to(self.config.default_device, non_blocking=True), y.pin_memory().to(self.config.default_device, non_blocking=True)
-        else:
-            x, y = x.to(self.config.default_device), y.to(self.config.default_device)
-        return x, y
+        record_offsets = [i * self.record_size for i in ix]
+        out = []
+        for g in get:
+            start,end = self.offset_map[g.value]
+            nps = [data[i+start:i+end] for i in record_offsets]
+
+            if g.value in self.index_set:
+                raise Exception("TODO: Eye(x) from indexes")
+            else:
+                t = torch.stack([torch.from_numpy(n.astype(np.int64)) for n in nps])
+            if self.config.device_type == 'cuda':
+                # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+                t = t.pin_memory().to(self.config.default_device, non_blocking=True)
+            else:
+                t = t.to(self.config.default_device)
+            out.append(t)
+        return out
 
 
 class TokenStringDataLoader(DataLoader):
@@ -75,26 +101,33 @@ class TokenStringDataLoader(DataLoader):
 
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    def get_train_batch(self) -> tuple[Tensor, Tensor]:
+    def get_train_batch(self, get: list[BatchType]) -> list[Tensor]:
         data = np.memmap(self.train_path, dtype=np.uint16, mode='r')
-        return self._get_batch(data)
+        return self._get_batch(data, get)
 
-    def get_val_batch(self) -> tuple[Tensor, Tensor]:
+    def get_val_batch(self, get: list[BatchType]) -> list[Tensor]:
         data = np.memmap(self.val_path, dtype=np.uint16, mode='r')
-        return self._get_batch(data)
+        return self._get_batch(data, get)
 
-    def _get_batch(self, data) -> tuple[Tensor, Tensor]:
+    def _get_batch(self, data, get: list[BatchType]) -> list[Tensor]:
         batch_size = self.config.batch_size
         block_size = self.config.context_size
         ix = torch.randint(len(data) - block_size, (batch_size,))
-        x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-        if self.config.device_type == 'cuda':
-            # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-            x, y = x.pin_memory().to(self.config.default_device, non_blocking=True), y.pin_memory().to(self.config.default_device, non_blocking=True)
-        else:
-            x, y = x.to(self.config.default_device), y.to(self.config.default_device)
-        return x, y
+        out = []
+        for g in get:
+            if g == BatchType.INPUT:
+                x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+            elif g == BatchType.OUTPUT:
+                x = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+            else:
+                raise Exception("TokenStringDataLoader does not support output masking")
+            if self.config.device_type == 'cuda':
+                # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+                x = x.pin_memory().to(self.config.default_device, non_blocking=True)
+            else:
+                x = x.to(self.config.default_device)
+            out.append(x)
+        return out
 
 
 
@@ -104,6 +137,8 @@ def open_dataset(config: NanoGPTConfig) -> DataLoader:
         batch_size=config.training.batch_size,
         context_size=config.model.context_size,
         data_dir=config.data_dir,
+        input_vocab_size=config.vocab.input.vocab_size,
+        output_vocab_size=config.vocab.output.vocab_size,
     )
     dspath = os.path.join(config.data_dir, config.project.dataset_meta_file)
     if not os.path.isfile(dspath):
