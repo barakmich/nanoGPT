@@ -2,6 +2,12 @@ from typing import Any
 import tiktoken
 import msgpack
 from abc import ABC, abstractmethod, abstractproperty
+from enum import Enum
+
+class SpecialToken(Enum):
+    NULL = "<|nul|>"
+    END = "<|end|>"
+
 
 class Vocabulary(ABC):
     kind: str
@@ -29,6 +35,9 @@ class Vocabulary(ABC):
     @abstractproperty
     def vocab_size(self) -> int:
         return 0
+
+    def null_token_id(self) -> int | None:
+        return None
 
 class TikTokenVocabulary(Vocabulary):
     kind: str = "tiktoken"
@@ -80,6 +89,10 @@ class DictVocabulary(Vocabulary):
 
     def decode_string(self, tokens: list[int]) -> str:
         return self.sep.join(self.decode(tokens))
+
+    @property
+    def null_token_id(self) -> int | None:
+        return self.stoi.get(SpecialToken.NULL.value, None)
 
     @property
     def vocab_size(self) -> int:
@@ -140,6 +153,9 @@ def instantiate_vocab(d: dict) -> Vocabulary:
                 allowed_special=set(d["allowed_special"]),
             )
         case "dict":
-            return DictVocabulary(d["stoi"], sep=d["sep"] if "sep" in d else "")
+            return DictVocabulary(
+                d["stoi"],
+                sep=d["sep"] if "sep" in d else "",
+            )
         case _:
             raise Exception("Unexpected input dictionary kind")

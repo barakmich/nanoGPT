@@ -9,6 +9,7 @@ import os
 import numpy as np
 
 from nanogpt.config import NanoGPTConfig
+from nanogpt.vocabs import VocabPair
 
 @dataclass
 class ContextConfig:
@@ -16,8 +17,7 @@ class ContextConfig:
     batch_size: int
     context_size: int
     data_dir: str
-    input_vocab_size: int
-    output_vocab_size: int
+    vocab: VocabPair
 
     @property
     def device_type(self):
@@ -79,9 +79,12 @@ class FixedEntryDataLoader(DataLoader):
         for g in get:
             start,end = self.offset_map[g.value]
             nps = [data[i+start:i+end] for i in record_offsets]
-
             if g.value in self.index_set:
-                raise Exception("TODO: Eye(x) from indexes")
+                countvecs = [np.eye(self.config.vocab.output.vocab_size, dtype=np.float32)[n].sum(0).squeeze() for n in nps]
+                for f in countvecs:
+                    f[f != 0] = 1.0
+                    f[self.config.vocab.output.null_token_id] = 0.0
+                t = torch.stack([torch.from_numpy(n) for n in countvecs])
             else:
                 t = torch.stack([torch.from_numpy(n.astype(np.int64)) for n in nps])
             if self.config.device_type == 'cuda':
@@ -137,8 +140,7 @@ def open_dataset(config: NanoGPTConfig) -> DataLoader:
         batch_size=config.training.batch_size,
         context_size=config.model.context_size,
         data_dir=config.data_dir,
-        input_vocab_size=config.vocab.input.vocab_size,
-        output_vocab_size=config.vocab.output.vocab_size,
+        vocab=config.vocab,
     )
     dspath = os.path.join(config.data_dir, config.project.dataset_meta_file)
     if not os.path.isfile(dspath):
