@@ -1,7 +1,7 @@
 [project]
 name = "shakespeare-char"
 dataset_dir = "data"
-compile = true
+compile = false
 device = "cuda"  # could also be "cpu" or "mps" for Macbooks
 
 [wandb]

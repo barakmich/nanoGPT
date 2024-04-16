@@ -82,12 +82,13 @@ class FixedEntryDataLoader(DataLoader):
             if g.value in self.index_set:
                 countvecs = [np.eye(self.config.vocab.output.vocab_size, dtype=np.float32)[n].sum(0).squeeze() for n in nps]
                 for f in countvecs:
-                    f[f != 0] = 1.0
-                    f[self.config.vocab.output.null_token_id] = 0.0
-                t = torch.stack([torch.from_numpy(n) for n in countvecs])
+                    f[f != 0] = True
+                    f[self.config.vocab.output.null_token_id] = False
+                t = torch.stack([torch.from_numpy(n.astype(np.float16)) for n in countvecs])
+                t = torch.unsqueeze(t, 1)
             else:
-                t = torch.stack([torch.from_numpy(n.astype(np.int64)) for n in nps])
-            if self.config.device_type == 'cuda':
+                t = torch.stack([torch.from_numpy((n).astype(np.int64)) for n in nps])
+            if self.config.device_type == 'cuda' and g.value not in self.index_set:
                 # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
                 t = t.pin_memory().to(self.config.default_device, non_blocking=True)
             else:

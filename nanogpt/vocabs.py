@@ -4,6 +4,15 @@ import msgpack
 from abc import ABC, abstractmethod, abstractproperty
 from enum import Enum
 
+def optimize_vocab_size(i: int) -> int:
+    # Bring it to the next multiple of 64, for performance reasons.
+    # TODO: Does it need to be above a threshhold to see the usefulness of it?
+    off = i % 64
+    if i == 0:
+        return i
+    return (64 - off) + i
+
+
 class SpecialToken(Enum):
     NULL = "<|nul|>"
     END = "<|end|>"
@@ -39,6 +48,11 @@ class Vocabulary(ABC):
     def null_token_id(self) -> int | None:
         return None
 
+    @abstractmethod
+    def set_optimize(self, optimize: bool):
+        pass
+
+
 class TikTokenVocabulary(Vocabulary):
     kind: str = "tiktoken"
 
@@ -46,6 +60,7 @@ class TikTokenVocabulary(Vocabulary):
         self.name = name
         self.encoding = tiktoken.get_encoding(name)
         self.allowed_special = allowed_special if allowed_special is not None else set()
+        self.optimize = False
 
     def encode(self, tokens: list[str]) -> list[int]:
         return [self.encoding.encode_single_token(x) for x in tokens]
@@ -61,7 +76,11 @@ class TikTokenVocabulary(Vocabulary):
 
     @property
     def vocab_size(self) -> int:
-        return self.encoding.max_token_value - 1
+        v = self.encoding.max_token_value - 1
+        return optimize_vocab_size(v) if self.optimize else v
+
+    def set_optimize(self, optimize: bool):
+        self.optimize = optimize
 
     def to_dict(self):
         return {
@@ -77,8 +96,11 @@ class DictVocabulary(Vocabulary):
         self.stoi = stoi
         self.itos = {v: k for k, v in stoi.items()}
         self.sep = sep
+        self.optimize = False
 
     def encode(self, tokens: list[str]) -> list[int]:
+        if self.null_token_id is not None:
+            return [self.stoi[c] if c != '' else self.null_token_id for c in tokens]
         return [self.stoi[x] for x in tokens]
 
     def decode(self, indices: list[int]) -> list[str]:
@@ -87,6 +109,7 @@ class DictVocabulary(Vocabulary):
     def encode_string(self, s: str) -> list[int]:
         return [self.stoi[c] for c in s]
 
+
     def decode_string(self, tokens: list[int]) -> str:
         return self.sep.join(self.decode(tokens))
 
@@ -94,15 +117,20 @@ class DictVocabulary(Vocabulary):
     def null_token_id(self) -> int | None:
         return self.stoi.get(SpecialToken.NULL.value, None)
 
+    def set_optimize(self, optimize: bool):
+        self.optimize = optimize
+
     @property
     def vocab_size(self) -> int:
-        return len(self.stoi)
+        v = len(self.stoi)
+        return optimize_vocab_size(v) if self.optimize else v
 
     def to_dict(self) -> dict:
         return {
             "kind": self.kind,
             "stoi": self.stoi,
             "sep": self.sep,
+            "optimize": self.optimize,
         }
 
 
@@ -116,6 +144,11 @@ class VocabPair:
             "input": self.input.to_dict(),
             "output": self._output.to_dict() if self._output else None,
         }
+
+    def set_optimize(self, optimize: bool):
+        self.input.set_optimize(optimize)
+        if self._output is not None:
+            self.output.set_optimize(optimize)
 
     def dump(self, writer: Any):
         return msgpack.dump(self._build_dict(), writer)

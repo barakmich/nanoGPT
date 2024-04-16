@@ -104,7 +104,8 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     causal: bool = True
-    sum_logits: bool = True
+    sum_logits: bool = False
+    final_norm: bool = False
 
 class GPT(nn.Module):
 
@@ -158,7 +159,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, output_masks=None):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -171,18 +172,31 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
+        post_normalize = False
 
         if targets is not None:
-            if self.config.sum_logits:
-                x = torch.sum(x, 1, keepdim=True)
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
+            if self.config.sum_logits:
+                logits = torch.sum(logits, 1, keepdim=True)
+                #logits = logits[:, [-1], :]
+                post_normalize = True
+            if output_masks is not None:
+                logits = torch.linalg.vecdot(logits, output_masks, dim=1).unsqueeze(1)
+                post_normalize = True
+
+            if post_normalize and self.config.final_norm:
+                logits = torch.nn.functional.normalize(logits, dim=2)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            if self.config.sum_logits:
-                x = torch.sum(x, 1, keepdim=True)
-            # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            if self.config.sum_logits:
+                logits = torch.sum(logits, 1, keepdim=True)
+                #logits = logits[:, [-1], :]
+                post_normalize = True
+            # inference-time mini-optimization: only forward the lm_head on the very last position
+            if post_normalize:
+                logits = torch.nn.functional.normalize(logits, dim=2)
             loss = None
 
         return logits, loss

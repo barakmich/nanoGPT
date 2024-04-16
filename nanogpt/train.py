@@ -58,14 +58,6 @@ def get_ddp_config(config: NanoGPTConfig) -> DDPConfig | None:
         return None
 
 
-def optimize_vocab_size(i: int) -> int:
-    # Bring it to the next multiple of 64, for performance reasons.
-    # TODO: Does it need to be above a threshhold to see the usefulness of it?
-    off = i % 64
-    if i == 0:
-        return i
-    return (64 - off) + i
-
 @dataclass
 class ModelTrainer:
     model: GPT | DDP
@@ -91,8 +83,9 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
     checkpoint = None
     vocab = config.vocab
 
-    in_vocab_size = optimize_vocab_size(vocab.input.vocab_size) if config.model.optimize_input_logits else vocab.input.vocab_size
-    out_vocab_size = optimize_vocab_size(vocab.output.vocab_size) if config.model.optimize_output_logits else vocab.output.vocab_size
+    vocab.set_optimize(config.model.optimize_vocab_size)
+    in_vocab_size = vocab.input.vocab_size
+    out_vocab_size = vocab.output.vocab_size
 
     model_args = dict(
         n_layer=config.model.layers,
@@ -102,6 +95,9 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
         bias=config.model.bias,
         vocab_size=in_vocab_size,
         output_vocab_size=out_vocab_size,
+        causal=config.model.causal,
+        final_norm=config.model.final_norm,
+        sum_logits=config.model.sum_logits,
         dropout=config.training.dropout
     ) # start with model_args from command line
 
@@ -171,6 +167,7 @@ def init_model(init_from: str, config: NanoGPTConfig) -> ModelTrainer:
         print("compiling the model... (takes a ~minute)")
         unoptimized_model = model
         model = torch.compile(model) # requires PyTorch 2.0
+        print("model compiled")
 
     # wrap model into DDP container
     if config.ddp:
@@ -200,13 +197,23 @@ def estimate_loss(ctx, trainer: ModelTrainer):
     for split in opts:
         losses = torch.zeros(trainer.config.output.eval_iters)
         for k in range(trainer.config.output.eval_iters):
+            print(".", end="", flush=True)
             if split == "train":
-                X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT]))
+                if trainer.config.model.output_mask:
+                    X, Y, M = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT, BatchType.OUTPUT_MASK]))
+                else:
+                    X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT]))
+                    M = None
             else:
-                X, Y = tuple(trainer.data_loader.get_val_batch([BatchType.INPUT, BatchType.OUTPUT]))
+                if trainer.config.model.output_mask:
+                    X, Y, M = tuple(trainer.data_loader.get_val_batch([BatchType.INPUT, BatchType.OUTPUT, BatchType.OUTPUT_MASK]))
+                else:
+                    X, Y = tuple(trainer.data_loader.get_val_batch([BatchType.INPUT, BatchType.OUTPUT]))
+                    M = None
             with ctx:
-                _, loss = trainer.model(X, Y)
+                _, loss = trainer.model(X, Y, M)
             losses[k] = loss.item()
+        print("")
         out[split] = losses.mean()
     trainer.model.train()
     return out
@@ -255,8 +262,14 @@ def log_timing(trainer: ModelTrainer, loss, start_time: float, local_iter_num: i
 def training_loop(ctx, trainer: ModelTrainer):
     config = trainer.config
     model = trainer.model
+    use_output_mask = trainer.config.model.output_mask
     gradient_accumulation_steps = config.training.gradient_accumulation_steps
-    X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT])) # fetch the very first batch
+    if use_output_mask:
+        X, Y, M = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT, BatchType.OUTPUT_MASK])) # fetch the very first batch
+    else:
+        X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT])) # fetch the very first batch
+        M = None
+
     last_timestamp = time.time()
     local_iter_num = 0 # number of iterations in the lifetime of this process
     loss = None
@@ -282,10 +295,14 @@ def training_loop(ctx, trainer: ModelTrainer):
                 # looking at the source of that context manager, it just toggles this variable
                 trainer.model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)  # type: ignore
             with ctx:
-                _, loss = model(X, Y)
+                _, loss = model(X, Y, M)
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
-            X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT]))
+            if use_output_mask:
+                X, Y, M = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT, BatchType.OUTPUT_MASK])) # fetch the very first batch
+            else:
+                X, Y = tuple(trainer.data_loader.get_train_batch([BatchType.INPUT, BatchType.OUTPUT]))
+                M = None
             # backward pass, with gradient scaling if training in fp16
             trainer.scaler.scale(loss).backward()
         # clip the gradient

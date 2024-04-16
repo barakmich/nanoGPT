@@ -36,11 +36,12 @@ class ModelConfig:
     heads: int
     embedding_dimension: int
     context_size: int
-    optimize_input_logits: bool = True
-    optimize_output_logits: bool = True
+    optimize_vocab_size: bool = True
     bias: bool = False
     causal: bool = True
     sum_logits: bool = False
+    output_mask: bool = False
+    final_norm: bool = False
 
 @dataclass
 class AdamWConfig:
