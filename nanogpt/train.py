@@ -98,7 +98,9 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
         causal=config.model.causal,
         final_norm=config.model.final_norm,
         sum_logits=config.model.sum_logits,
-        dropout=config.training.dropout
+        dropout=config.training.dropout,
+        positional_embeddings=config.model.positional_embeddings,
+        null_token=None if not config.model.null_token_mask else config.vocab.input.null_token_id,
     ) # start with model_args from command line
 
     if init_from == 'scratch':
@@ -210,8 +212,9 @@ def estimate_loss(ctx, trainer: ModelTrainer):
                 else:
                     X, Y = tuple(trainer.data_loader.get_val_batch([BatchType.INPUT, BatchType.OUTPUT]))
                     M = None
+
             with ctx:
-                _, loss = trainer.model(X, Y, M)
+                _, loss = trainer.model(X, Y, output_masks=M)
             losses[k] = loss.item()
         print("")
         out[split] = losses.mean()
@@ -295,7 +298,7 @@ def training_loop(ctx, trainer: ModelTrainer):
                 # looking at the source of that context manager, it just toggles this variable
                 trainer.model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)  # type: ignore
             with ctx:
-                _, loss = model(X, Y, M)
+                _, loss = model(X, Y, output_masks=M)
                 loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             if use_output_mask:

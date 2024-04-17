@@ -42,6 +42,8 @@ class ModelConfig:
     sum_logits: bool = False
     output_mask: bool = False
     final_norm: bool = False
+    positional_embeddings: bool = True
+    null_token_mask: bool = False
 
 @dataclass
 class AdamWConfig:

@@ -106,6 +106,9 @@ class GPTConfig:
     causal: bool = True
     sum_logits: bool = False
     final_norm: bool = False
+    positional_embeddings: bool = True
+    null_token: int | None = None
+
 
 class GPT(nn.Module):
 
@@ -116,7 +119,7 @@ class GPT(nn.Module):
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wte = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=config.null_token),
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
@@ -167,20 +170,22 @@ class GPT(nn.Module):
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        if self.config.positional_embeddings:
+            pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+            x = self.transformer.drop(tok_emb + pos_emb)
+        else:
+            x = self.transformer.drop(tok_emb)
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
         post_normalize = False
 
         if targets is not None:
+            if self.config.sum_logits:
+                x = torch.mean(x, 1, keepdim=True)
+                post_normalize = True
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            if self.config.sum_logits:
-                logits = torch.sum(logits, 1, keepdim=True)
-                #logits = logits[:, [-1], :]
-                post_normalize = True
             if output_masks is not None:
                 logits = torch.linalg.vecdot(logits, output_masks, dim=1).unsqueeze(1)
                 post_normalize = True
@@ -189,13 +194,12 @@ class GPT(nn.Module):
                 logits = torch.nn.functional.normalize(logits, dim=2)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             if self.config.sum_logits:
-                logits = torch.sum(logits, 1, keepdim=True)
-                #logits = logits[:, [-1], :]
+                x = torch.mean(x, 1, keepdim=True)
                 post_normalize = True
+            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            if post_normalize:
+            if post_normalize and self.config.final_norm:
                 logits = torch.nn.functional.normalize(logits, dim=2)
             loss = None
 
@@ -255,7 +259,13 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(
+            self,
+            idx,
+            max_new_tokens,
+            temperature=1.0,
+            top_k=None,
+        ):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
