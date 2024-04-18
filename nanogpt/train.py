@@ -97,7 +97,7 @@ def _create_model(init_from: str, config: NanoGPTConfig) -> tuple[GPT, int, floa
         output_vocab_size=out_vocab_size,
         causal=config.model.causal,
         final_norm=config.model.final_norm,
-        sum_logits=config.model.sum_logits,
+        avg_logits=config.model.avg_logits,
         dropout=config.training.dropout,
         positional_embeddings=config.model.positional_embeddings,
         null_token=None if not config.model.null_token_mask else config.vocab.input.null_token_id,

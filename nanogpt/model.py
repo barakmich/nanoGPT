@@ -42,7 +42,7 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         self.causal = config.causal
-        self.sum_logits = config.sum_logits
+        self.avg_logits = config.avg_logits
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -104,7 +104,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     causal: bool = True
-    sum_logits: bool = False
+    avg_logits: bool = False
     final_norm: bool = False
     positional_embeddings: bool = True
     null_token: int | None = None
@@ -181,7 +181,7 @@ class GPT(nn.Module):
         post_normalize = False
 
         if targets is not None:
-            if self.config.sum_logits:
+            if self.config.avg_logits:
                 x = torch.mean(x, 1, keepdim=True)
                 post_normalize = True
             # if we are given some desired targets also calculate the loss
@@ -194,7 +194,7 @@ class GPT(nn.Module):
                 logits = torch.nn.functional.normalize(logits, dim=2)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            if self.config.sum_logits:
+            if self.config.avg_logits:
                 x = torch.mean(x, 1, keepdim=True)
                 post_normalize = True
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
@@ -265,6 +265,7 @@ class GPT(nn.Module):
             max_new_tokens,
             temperature=1.0,
             top_k=None,
+            as_vec=False,
         ):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
@@ -284,6 +285,8 @@ class GPT(nn.Module):
                 logits[logits < v[:, [-1]]] = -float('Inf')
             # apply softmax to convert logits to (normalized) probabilities
             probs = F.softmax(logits, dim=-1)
+            if as_vec:
+                return probs
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue

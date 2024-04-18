@@ -39,7 +39,7 @@ class ModelConfig:
     optimize_vocab_size: bool = True
     bias: bool = False
     causal: bool = True
-    sum_logits: bool = False
+    avg_logits: bool = False
     output_mask: bool = False
     final_norm: bool = False
     positional_embeddings: bool = True

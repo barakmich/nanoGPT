@@ -29,6 +29,7 @@ def main():
     sample_parser.add_argument("--temperature", type=float)
     sample_parser.add_argument("--top_k", type=int, help="Number of top tokens to sample from (generate nothing too weird)")
     sample_parser.add_argument("--last", action="store_true", default=False, help="Only return the last token")
+    sample_parser.add_argument("--top_n", type=int, help="Return the relative probabilities of the top N next tokens")
     sample_parser.set_defaults(subcommand="sample")
 
     config_parser = subparsers.add_parser("config", help="print the config")
@@ -65,7 +66,7 @@ def main():
         prompt = args.prompt
         if len(args.token_prompt) != 0:
             prompt = args.token_prompt
-        sample_main(sampler, prompt, last=args.last)
+        sample_main(sampler, prompt, last=args.last, top_n_probs=args.top_n)
     elif args.subcommand == "head":
         head_main(ngpt_config)
     elif args.subcommand == "config":

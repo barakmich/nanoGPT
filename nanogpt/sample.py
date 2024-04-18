@@ -18,7 +18,13 @@ class ModelSampler:
     top_k: int = 200
 
 
-def sample_main(sampler: ModelSampler, prompt: str | list[str] | None = None, seed:int = 1337, last: bool = False):
+def sample_main(
+        sampler: ModelSampler,
+        prompt: str | list[str] | None = None,
+        seed:int = 1337,
+        last: bool = False,
+        top_n_probs: int | None = None
+    ):
     if prompt is None:
         prompt = "\n"
 
@@ -56,10 +62,18 @@ def sample_main(sampler: ModelSampler, prompt: str | list[str] | None = None, se
     with torch.no_grad():
         with ctx:
             for k in range(sampler.num_samples):
-                y = model.generate(x, sampler.max_tokens, temperature=sampler.temperature, top_k=sampler.top_k)
-                out_toks = y[0].tolist()
-                if last:
-                    print(vocab.output.decode_string([out_toks[-1]]))
+                y = model.generate(x, sampler.max_tokens, temperature=sampler.temperature, top_k=sampler.top_k, as_vec=top_n_probs is not None)
+                if top_n_probs is not None:
+                    tops = y[0].argsort(descending=True).tolist()[:top_n_probs]
+                    toks = vocab.output.decode(tops)
+                    for tok, idx in zip(toks, tops):
+                        print(f"{tok}: {y[0][idx] * 100:.5f}%")
+                    break
+
                 else:
-                    print(vocab.output.decode_string(out_toks))
+                    out_toks = y[0].tolist()
+                    if last:
+                        print(vocab.output.decode_string([out_toks[-1]]))
+                    else:
+                        print(vocab.output.decode_string(out_toks))
                 print('---------------')
