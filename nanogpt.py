@@ -5,6 +5,7 @@ import logging
 from nanogpt.config import NanoGPTConfig
 from nanogpt.head import head_main
 from nanogpt.sample import ModelSampler, sample_main
+from nanogpt.trace import trace_main
 from nanogpt.train import train_main
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,10 @@ def main():
 
     head_parser = subparsers.add_parser("head", help="peek into the dataset")
     head_parser.set_defaults(subcommand="head")
+
+    export_parser = subparsers.add_parser("export", help="export a trace the embedding and logit")
+    export_parser.set_defaults(subcommand="export")
+    export_parser.add_argument("--output", help="Output filename")
 
 
     args = parser.parse_args()
@@ -71,6 +76,8 @@ def main():
         head_main(ngpt_config)
     elif args.subcommand == "config":
         print(str(ngpt_config))
+    elif args.subcommand == "export":
+        trace_main(ngpt_config, args.output)
     else:
         logger.fatal("No such subcommand")
 

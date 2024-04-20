@@ -8,7 +8,7 @@ def optimize_vocab_size(i: int) -> int:
     # Bring it to the next multiple of 64, for performance reasons.
     # TODO: Does it need to be above a threshhold to see the usefulness of it?
     off = i % 64
-    if i == 0:
+    if off == 0:
         return i
     return (64 - off) + i
 
