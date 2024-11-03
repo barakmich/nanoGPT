@@ -7,6 +7,7 @@ from nanogpt.head import head_main
 from nanogpt.sample import ModelSampler, sample_main
 from nanogpt.trace import trace_main
 from nanogpt.train import train_main
+from nanogpt.bundle import build_modelfile
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,12 @@ def main():
 
     export_parser = subparsers.add_parser("export", help="export a trace the embedding and logit")
     export_parser.set_defaults(subcommand="export")
-    export_parser.add_argument("--output", help="Output filename")
+    export_parser.add_argument("--and_bundle", help="Output bundle filename")
+
+    bundle_parser = subparsers.add_parser("bundle", help="bundle a trace and a vocabulary")
+    bundle_parser.set_defaults(subcommand="bundle")
+
+    bundle_parser.add_argument("--output", help="Output filename")
 
 
     args = parser.parse_args()
@@ -77,7 +83,11 @@ def main():
     elif args.subcommand == "config":
         print(str(ngpt_config))
     elif args.subcommand == "export":
-        trace_main(ngpt_config, args.output)
+        trace_main(ngpt_config)
+        if args.and_bundle is not None:
+            build_modelfile(args.and_bundle, ngpt_config)
+    elif args.subcommand == "bundle":
+        build_modelfile(args.output, ngpt_config)
     else:
         logger.fatal("No such subcommand")
 
